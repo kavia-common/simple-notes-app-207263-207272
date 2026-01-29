@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Initialize SQLite database for notes_database"""
+"""Initialize SQLite database for notes_database.
+
+This script is designed to be safe to run multiple times:
+- It preserves any existing database file and tables.
+- It uses CREATE TABLE IF NOT EXISTS so existing tables remain untouched.
+- It maintains the existing db_connection.txt conventions and output format.
+"""
 
 import sqlite3
 import os
@@ -30,6 +36,9 @@ else:
 conn = sqlite3.connect(DB_NAME)
 cursor = conn.cursor()
 
+# Enable foreign keys (safe no-op if unused)
+cursor.execute("PRAGMA foreign_keys = ON")
+
 # Create initial schema
 cursor.execute("""
     CREATE TABLE IF NOT EXISTS app_info (
@@ -50,15 +59,51 @@ cursor.execute("""
     )
 """)
 
-# Insert initial data
-cursor.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)", 
-               ("project_name", "notes_database"))
-cursor.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)", 
-               ("version", "0.1.0"))
-cursor.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)", 
-               ("author", "John Doe"))
-cursor.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)", 
-               ("description", ""))
+# Notes table for the simple notes app
+# - created_at/updated_at are stored as ISO-like timestamps via CURRENT_TIMESTAMP
+# - updated_at is automatically maintained via a trigger on UPDATE
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )
+""")
+
+# Trigger to keep updated_at in sync on any update.
+# Notes:
+# - IF NOT EXISTS is supported for triggers on modern SQLite versions.
+# - This trigger does not modify title/content; it only updates the updated_at timestamp.
+cursor.execute("""
+    CREATE TRIGGER IF NOT EXISTS notes_set_updated_at
+    AFTER UPDATE ON notes
+    FOR EACH ROW
+    BEGIN
+        UPDATE notes
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE id = NEW.id;
+    END;
+""")
+
+# Insert initial data (preserve existing behavior)
+cursor.execute(
+    "INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)",
+    ("project_name", "notes_database"),
+)
+cursor.execute(
+    "INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)",
+    ("version", "0.1.0"),
+)
+cursor.execute(
+    "INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)",
+    ("author", "John Doe"),
+)
+cursor.execute(
+    "INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)",
+    ("description", ""),
+)
 
 conn.commit()
 
@@ -71,7 +116,7 @@ record_count = cursor.fetchone()[0]
 
 conn.close()
 
-# Save connection information to a file
+# Save connection information to a file (preserve existing conventions)
 current_dir = os.getcwd()
 connection_string = f"sqlite:///{current_dir}/{DB_NAME}"
 
@@ -120,12 +165,13 @@ print(f"  App info records: {record_count}")
 # If sqlite3 CLI is available, show how to use it
 try:
     import subprocess
-    result = subprocess.run(['which', 'sqlite3'], capture_output=True, text=True)
+
+    result = subprocess.run(["which", "sqlite3"], capture_output=True, text=True)
     if result.returncode == 0:
         print("")
         print("SQLite CLI is available. You can also use:")
         print(f"  sqlite3 {DB_NAME}")
-except:
+except Exception:
     pass
 
 # Exit successfully
